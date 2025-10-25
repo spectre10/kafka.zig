@@ -1,11 +1,12 @@
 //! Kafka request and response types
 //!
-//! This module implements specific Kafka protocol requests and their responses.
+//! This module implements specific Kafka broker requests and their responses.
 
 const std = @import("std");
 const mem = std.mem;
 const Allocator = mem.Allocator;
-const protocol = @import("protocol.zig");
+const broker = @import("broker.zig");
+const constants = @import("constants.zig");
 const Client = @import("client.zig").Client;
 
 // =============================================================================
@@ -33,7 +34,7 @@ pub const ApiVersion = struct {
 
 /// ApiVersions response
 pub const ApiVersionsResponse = struct {
-    error_code: protocol.ErrorCode,
+    error_code: constants.ErrorCode,
     api_versions: []ApiVersion,
 
     pub fn deinit(self: *ApiVersionsResponse, allocator: Allocator) void {
@@ -44,9 +45,9 @@ pub const ApiVersionsResponse = struct {
     }
 
     pub fn parse(reader: anytype, allocator: Allocator) !ApiVersionsResponse {
-        const error_code = protocol.ErrorCode.fromInt(try protocol.readInt16(reader));
+        const error_code = constants.ErrorCode.fromInt(try broker.readInt16(reader));
 
-        const api_versions_len = try protocol.readArrayLen(reader);
+        const api_versions_len = try broker.readArrayLen(reader);
         if (api_versions_len < 0) {
             return error.InvalidArrayLength;
         }
@@ -56,9 +57,9 @@ pub const ApiVersionsResponse = struct {
 
         for (api_versions) |*api_version| {
             api_version.* = ApiVersion{
-                .api_key = try protocol.readInt16(reader),
-                .min_version = try protocol.readInt16(reader),
-                .max_version = try protocol.readInt16(reader),
+                .api_key = try broker.readInt16(reader),
+                .min_version = try broker.readInt16(reader),
+                .max_version = try broker.readInt16(reader),
             };
         }
 
@@ -92,13 +93,13 @@ pub const MetadataRequest = struct {
 
     pub fn write(self: MetadataRequest, writer: anytype) !void {
         if (self.topics) |topics| {
-            try protocol.writeArrayLen(writer, topics.len);
+            try broker.writeArrayLen(writer, topics.len);
             for (topics) |topic| {
-                try protocol.writeString(writer, topic);
+                try broker.writeString(writer, topic);
             }
         } else {
             // -1 means all topics
-            try protocol.writeInt32(writer, -1);
+            try broker.writeInt32(writer, -1);
         }
     }
 };
@@ -117,7 +118,7 @@ pub const Broker = struct {
 
 /// Partition metadata
 pub const PartitionMetadata = struct {
-    error_code: protocol.ErrorCode,
+    error_code: constants.ErrorCode,
     partition_id: i32,
     leader: i32,
     replicas: []i32,
@@ -131,7 +132,7 @@ pub const PartitionMetadata = struct {
 
 /// Topic metadata
 pub const TopicMetadata = struct {
-    error_code: protocol.ErrorCode,
+    error_code: constants.ErrorCode,
     topic_name: []u8,
     partitions: []PartitionMetadata,
 
@@ -150,8 +151,8 @@ pub const MetadataResponse = struct {
     topics: []TopicMetadata,
 
     pub fn deinit(self: *MetadataResponse, allocator: Allocator) void {
-        for (self.brokers) |*broker| {
-            broker.deinit(allocator);
+        for (self.brokers) |*b| {
+            b.deinit(allocator);
         }
         allocator.free(self.brokers);
 
@@ -163,32 +164,32 @@ pub const MetadataResponse = struct {
 
     pub fn parse(reader: anytype, allocator: Allocator) !MetadataResponse {
         // Parse brokers
-        const brokers_len = try protocol.readArrayLen(reader);
+        const brokers_len = try broker.readArrayLen(reader);
         if (brokers_len < 0) {
             return error.InvalidArrayLength;
         }
 
-        // const correlation_id = try protocol.readArrayLen(reader);
+        // const correlation_id = try broker.readArrayLen(reader);
         
         const brokers = try allocator.alloc(Broker, @intCast(brokers_len));
         errdefer allocator.free(brokers);
 
-        for (brokers) |*broker| {
-            broker.* = Broker{
-                .node_id = try protocol.readInt32(reader),
-                .host = try protocol.readString(reader, allocator),
-                .port = try protocol.readInt32(reader),
-                .rack = try protocol.readNullableString(reader, allocator),
+        for (brokers) |*b| {
+            b.* = Broker{
+                .node_id = try broker.readInt32(reader),
+                .host = try broker.readString(reader, allocator),
+                .port = try broker.readInt32(reader),
+                .rack = try broker.readNullableString(reader, allocator),
             };
         }
         
-        const controller_id = try protocol.readInt32(reader);
+        const controller_id = try broker.readInt32(reader);
         std.debug.print("{d}\n", .{controller_id});
 
         // Parse topics
-        const topics_len = try protocol.readArrayLen(reader);
+        const topics_len = try broker.readArrayLen(reader);
         if (topics_len < 0) {
-            for (brokers) |*broker| broker.deinit(allocator);
+            for (brokers) |*b| b.deinit(allocator);
             return error.InvalidArrayLength;
         }
 
@@ -196,11 +197,11 @@ pub const MetadataResponse = struct {
         errdefer allocator.free(topics);
 
         for (topics) |*topic| {
-            const error_code = protocol.ErrorCode.fromInt(try protocol.readInt16(reader));
-            const topic_name = try protocol.readString(reader, allocator);
+            const error_code = constants.ErrorCode.fromInt(try broker.readInt16(reader));
+            const topic_name = try broker.readString(reader, allocator);
 
             // Parse partitions
-            const partitions_len = try protocol.readArrayLen(reader);
+            const partitions_len = try broker.readArrayLen(reader);
             if (partitions_len < 0) {
                 allocator.free(topic_name);
                 return error.InvalidArrayLength;
@@ -210,29 +211,29 @@ pub const MetadataResponse = struct {
             errdefer allocator.free(partitions);
 
             for (partitions) |*partition| {
-                const part_error_code = protocol.ErrorCode.fromInt(try protocol.readInt16(reader));
-                const partition_id = try protocol.readInt32(reader);
-                const leader = try protocol.readInt32(reader);
+                const part_error_code = constants.ErrorCode.fromInt(try broker.readInt16(reader));
+                const partition_id = try broker.readInt32(reader);
+                const leader = try broker.readInt32(reader);
 
                 // Parse replicas
-                const replicas_len = try protocol.readArrayLen(reader);
+                const replicas_len = try broker.readArrayLen(reader);
                 if (replicas_len < 0) {
                     return error.InvalidArrayLength;
                 }
                 const replicas = try allocator.alloc(i32, @intCast(replicas_len));
                 for (replicas) |*replica| {
-                    replica.* = try protocol.readInt32(reader);
+                    replica.* = try broker.readInt32(reader);
                 }
 
                 // Parse ISR
-                const isr_len = try protocol.readArrayLen(reader);
+                const isr_len = try broker.readArrayLen(reader);
                 if (isr_len < 0) {
                     allocator.free(replicas);
                     return error.InvalidArrayLength;
                 }
                 const isr = try allocator.alloc(i32, @intCast(isr_len));
                 for (isr) |*isr_id| {
-                    isr_id.* = try protocol.readInt32(reader);
+                    isr_id.* = try broker.readInt32(reader);
                 }
 
                 partition.* = PartitionMetadata{
@@ -291,30 +292,30 @@ pub const ProduceRequest = struct {
     messages: []const Message,
 
     pub fn write(self: ProduceRequest, writer: anytype) !void {
-        try protocol.writeInt16(writer, self.required_acks);
-        try protocol.writeInt32(writer, self.timeout);
+        try broker.writeInt16(writer, self.required_acks);
+        try broker.writeInt32(writer, self.timeout);
 
         // Write topic data array (length 1)
-        try protocol.writeArrayLen(writer, 1);
+        try broker.writeArrayLen(writer, 1);
 
         // Write topic name
-        try protocol.writeString(writer, self.topic);
+        try broker.writeString(writer, self.topic);
 
         // Write partition data array (length 1)
-        try protocol.writeArrayLen(writer, 1);
+        try broker.writeArrayLen(writer, 1);
 
         // Write partition
-        try protocol.writeInt32(writer, self.partition);
+        try broker.writeInt32(writer, self.partition);
 
         // Write message set size (we'll compute it)
-        var message_set_buf: std.ArrayList(u8) = .empty;
-        defer message_set_buf.deinit(std.heap.page_allocator);
-        const message_set_writer = message_set_buf.writer(std.heap.page_allocator);
+        var message_set_buf: std.Io.Writer.Allocating = .init(std.heap.page_allocator);
+        defer message_set_buf.deinit();
+        const message_set_writer = &message_set_buf.writer;
 
         // Write each message
         for (self.messages) |message| {
             // Offset (not used in produce, set to 0)
-            try protocol.writeInt64(message_set_writer, 0);
+            try broker.writeInt64(message_set_writer, 0);
 
             // Compute message size
             const key_size: i32 = if (message.key) |k| @intCast(k.len) else -1;
@@ -328,41 +329,41 @@ pub const ProduceRequest = struct {
                 value_size; // value
 
             // Write message size
-            try protocol.writeInt32(message_set_writer, message_size);
+            try broker.writeInt32(message_set_writer, message_size);
 
             // Calculate CRC placeholder (should calculate actual CRC32)
             const crc: i32 = 0;
-            try protocol.writeInt32(message_set_writer, crc);
+            try broker.writeInt32(message_set_writer, crc);
 
             // Magic byte (0 for v0)
-            try protocol.writeInt8(message_set_writer, 0);
+            try broker.writeInt8(message_set_writer, 0);
 
             // Attributes (0 for no compression)
-            try protocol.writeInt8(message_set_writer, 0);
+            try broker.writeInt8(message_set_writer, 0);
 
             // Key
             if (message.key) |key| {
-                try protocol.writeInt32(message_set_writer, @intCast(key.len));
-                try protocol.writeAll(message_set_writer, key);
+                try broker.writeInt32(message_set_writer, @intCast(key.len));
+                try broker.writeAll(message_set_writer, key);
             } else {
-                try protocol.writeInt32(message_set_writer, -1);
+                try broker.writeInt32(message_set_writer, -1);
             }
 
             // Value
-            try protocol.writeInt32(message_set_writer, @intCast(message.value.len));
-            try protocol.writeAll(message_set_writer, message.value);
+            try broker.writeInt32(message_set_writer, @intCast(message.value.len));
+            try broker.writeAll(message_set_writer, message.value);
         }
 
         // Write message set size and data
-        try protocol.writeInt32(writer, @intCast(message_set_buf.items.len));
-        try protocol.writeAll(writer, message_set_buf.items);
+        try broker.writeInt32(writer, @intCast(message_set_buf.written().len));
+        try broker.writeAll(writer, message_set_buf.written());
     }
 };
 
 /// Partition produce response
 pub const PartitionProduceResponse = struct {
     partition: i32,
-    error_code: protocol.ErrorCode,
+    error_code: constants.ErrorCode,
     offset: i64,
 };
 
@@ -389,7 +390,7 @@ pub const ProduceResponse = struct {
     }
 
     pub fn parse(reader: anytype, allocator: Allocator) !ProduceResponse {
-        const topics_len = try protocol.readArrayLen(reader);
+        const topics_len = try broker.readArrayLen(reader);
         if (topics_len < 0) {
             return error.InvalidArrayLength;
         }
@@ -398,9 +399,9 @@ pub const ProduceResponse = struct {
         errdefer allocator.free(topics);
 
         for (topics) |*topic| {
-            const topic_name = try protocol.readString(reader, allocator);
+            const topic_name = try broker.readString(reader, allocator);
 
-            const partitions_len = try protocol.readArrayLen(reader);
+            const partitions_len = try broker.readArrayLen(reader);
             if (partitions_len < 0) {
                 allocator.free(topic_name);
                 return error.InvalidArrayLength;
@@ -411,9 +412,9 @@ pub const ProduceResponse = struct {
 
             for (partitions) |*partition| {
                 partition.* = PartitionProduceResponse{
-                    .partition = try protocol.readInt32(reader),
-                    .error_code = protocol.ErrorCode.fromInt(try protocol.readInt16(reader)),
-                    .offset = try protocol.readInt64(reader),
+                    .partition = try broker.readInt32(reader),
+                    .error_code = constants.ErrorCode.fromInt(try broker.readInt16(reader)),
+                    .offset = try broker.readInt64(reader),
                 };
             }
 

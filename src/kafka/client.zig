@@ -7,7 +7,8 @@ const std = @import("std");
 const net = std.net;
 const mem = std.mem;
 const Allocator = mem.Allocator;
-const protocol = @import("protocol.zig");
+const broker = @import("broker.zig");
+const constants = @import("constants.zig");
 
 /// Kafka client for managing connections to brokers
 pub const Client = struct {
@@ -50,7 +51,7 @@ pub const Client = struct {
     /// The response_parser should read from the provided reader and return the response
     pub fn sendRequest(
         self: *Client,
-        api_key: protocol.ApiKey,
+        api_key: constants.ApiKey,
         api_version: i16,
         request_body: anytype,
         comptime ResponseType: type,
@@ -60,7 +61,7 @@ pub const Client = struct {
         // const correlation_id = self.getCorrelationId();
 
         // Create request header
-        const header = protocol.RequestHeader{
+        const header = broker.RequestHeader{
             .api_key = api_key.toInt(),
             .api_version = api_version,
             .correlation_id = 999,
@@ -68,10 +69,10 @@ pub const Client = struct {
         };
 
         // Serialize request to a buffer
-        var request_buf: std.ArrayList(u8) = .empty;
-        defer request_buf.deinit(self.allocator);
+        var request_buf: std.Io.Writer.Allocating = .init(self.allocator);
+        defer request_buf.deinit();
 
-        const request_writer = request_buf.writer(self.allocator);
+        const request_writer: *std.Io.Writer = &request_buf.writer;
 
         // Write header
         try header.write(request_writer);
@@ -81,11 +82,11 @@ pub const Client = struct {
         try request_body.write(request_writer);
 
         // Send size prefix + request
-        const size: i32 = @intCast(request_buf.items.len);
+        const size: i32 = @intCast(request_buf.written().len);
 
         // Write size prefix (4 bytes, big-endian)
         var size_buf: [4]u8 = undefined;
-        mem.writeInt(i32, &size_buf, size, protocol.endian);
+        mem.writeInt(i32, &size_buf, size, broker.endian);
         {
             var written: usize = 0;
             while (written < size_buf.len) {
@@ -97,17 +98,11 @@ pub const Client = struct {
         // Write request body
         {
             var written: usize = 0;
-            while (written < request_buf.items.len) {
-                written += try self.stream.write(request_buf.items[written..]);
+            while (written < request_buf.written().len) {
+                written += try self.stream.write(request_buf.written()[written..]);
             }
         }
 
-        /////////////////////////////////////
-        for (size_buf) |byte| {
-            std.debug.print("0x{x:0>2} ", .{byte});
-        }
-        std.debug.print("\n", .{});
-        /////////////////////////////////////
         // Read response size (4 bytes, big-endian)
         var response_size_buf: [4]u8 = undefined;
         {
@@ -120,7 +115,7 @@ pub const Client = struct {
                 readn += n;
             }
         }
-        const response_size = mem.readInt(i32, &response_size_buf, protocol.endian);
+        const response_size = mem.readInt(i32, &response_size_buf, broker.endian);
 
         if (response_size < 4 or response_size > 100 * 1024 * 1024) {
             return error.InvalidResponseSize;
@@ -141,16 +136,15 @@ pub const Client = struct {
         }
 
         // Parse response
-        var response_stream = std.io.fixedBufferStream(response_data);
-        const response_reader = response_stream.reader();
+        var response_reader: std.Io.Reader = .fixed(response_data);
 
         // Read and verify response header
-        const response_header = try protocol.ResponseHeader.read(response_reader);
+        const response_header = try broker.ResponseHeader.read(&response_reader);
         if (response_header.correlation_id != 999) {
             return error.CorrelationIdMismatch;
         }
 
         // Parse response body
-        return try response_parser_fn(response_reader, self.allocator);
+        return try response_parser_fn(&response_reader, self.allocator);
     }
 };

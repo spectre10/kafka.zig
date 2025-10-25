@@ -28,6 +28,7 @@ pub fn main() !void {
 
     std.debug.print("Connected successfully!\n\n", .{});
 
+    std.debug.print("{s}\n", .{client.host});
     // 1. Query API Versions
     // std.debug.print("--- API Versions Request ---\n", .{});
     // var api_versions_response = try kafka.apiVersions(&client);
