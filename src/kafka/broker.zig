@@ -126,12 +126,6 @@ pub fn writeArrayLen(writer: *Io.Writer, len: usize) !void {
 //     }
 // }
 
-/// Read an int8
-pub fn readInt8(reader: *Io.Reader) !i8 {
-    const byte = try reader.readByte();
-    return @bitCast(byte);
-}
-
 /// Read an int16 in big-endian format
 pub fn readInt16(reader: *Io.Reader) !i16 {
     var buf: [2]u8 = undefined;

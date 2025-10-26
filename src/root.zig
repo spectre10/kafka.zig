@@ -16,14 +16,14 @@
 const std = @import("std");
 
 // Re-export public modules
-pub const protocol = @import("kafka/protocol.zig");
+pub const constants = @import("kafka/constants.zig");
 pub const client = @import("kafka/client.zig");
 pub const requests = @import("kafka/requests.zig");
 
 // Re-export commonly used types
 pub const Client = client.Client;
-pub const ApiKey = protocol.ApiKey;
-pub const ErrorCode = protocol.ErrorCode;
+pub const ApiKey = constants.ApiKey;
+pub const ErrorCode = constants.ErrorCode;
 
 // Re-export request/response types
 pub const ApiVersionsResponse = requests.ApiVersionsResponse;
@@ -43,5 +43,5 @@ pub const produce = requests.produce;
 test {
     // Run tests from all submodules
     std.testing.refAllDecls(@This());
-    std.testing.refAllDecls(protocol);
+    std.testing.refAllDecls(constants);
 }
